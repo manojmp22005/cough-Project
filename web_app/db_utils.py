@@ -22,8 +22,10 @@ def log_cough(cough_type, confidence=0.95):
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
     local_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO cough_events (timestamp, cough_type, confidence) VALUES (?, ?, ?)", 
-              (local_time, cough_type, confidence))
+    # New recordings start as processed=0
+    processed = 1 if cough_type != "Audio Recorded" else 0
+    c.execute("INSERT INTO cough_events (timestamp, cough_type, confidence, processed) VALUES (?, ?, ?, ?)", 
+              (local_time, cough_type, confidence, processed))
     conn.commit()
     conn.close()
 
@@ -51,17 +53,21 @@ def clear_db():
     conn.close()
 
 # ============================================
-# TRACKING & ANALYTICS QUERIES
+# TRACKING & ANALYTICS QUERIES (FILTERED FOR COUGHS ONLY)
 # ============================================
+
+# We define a "Detected Cough" as an event that has been processed 
+# and the label is NOT 'Audio Recorded' and NOT 'Noise'
+COUGH_FILTER = "WHERE processed = 1 AND cough_type LIKE '%Cough%'"
 
 def get_daily_counts(days=7):
     """Get cough count per day for the last N days."""
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
-    c.execute("""
+    c.execute(f"""
         SELECT DATE(timestamp) as day, COUNT(*) as count
         FROM cough_events
-        WHERE timestamp >= DATE('now', 'localtime', ?)
+        {COUGH_FILTER} AND timestamp >= DATE('now', 'localtime', ?)
         GROUP BY DATE(timestamp)
         ORDER BY day ASC
     """, (f'-{days} days',))
@@ -74,10 +80,10 @@ def get_hourly_counts_today():
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
     today = datetime.datetime.now().strftime("%Y-%m-%d")
-    c.execute("""
+    c.execute(f"""
         SELECT CAST(SUBSTR(timestamp, 12, 2) AS INTEGER) as hour, COUNT(*) as count
         FROM cough_events
-        WHERE DATE(timestamp) = ?
+        {COUGH_FILTER} AND DATE(timestamp) = ?
         GROUP BY hour
         ORDER BY hour ASC
     """, (today,))
@@ -86,20 +92,20 @@ def get_hourly_counts_today():
     return rows
 
 def get_total_count():
-    """Get total cough events count."""
+    """Get total detected cough events count."""
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM cough_events")
+    c.execute(f"SELECT COUNT(*) FROM cough_events {COUGH_FILTER}")
     count = c.fetchone()[0]
     conn.close()
     return count
 
 def get_today_count():
-    """Get today's cough count."""
+    """Get today's total detected cough count."""
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
     today = datetime.datetime.now().strftime("%Y-%m-%d")
-    c.execute("SELECT COUNT(*) FROM cough_events WHERE DATE(timestamp) = ?", (today,))
+    c.execute(f"SELECT COUNT(*) FROM cough_events {COUGH_FILTER} AND DATE(timestamp) = ?", (today,))
     count = c.fetchone()[0]
     conn.close()
     return count
@@ -108,10 +114,10 @@ def get_weekly_counts(weeks=4):
     """Get cough count per week for the last N weeks."""
     conn = sqlite3.connect(DB_NAME, timeout=10)
     c = conn.cursor()
-    c.execute("""
+    c.execute(f"""
         SELECT STRFTIME('%Y-W%W', timestamp) as week, COUNT(*) as count
         FROM cough_events
-        WHERE timestamp >= DATE('now', 'localtime', ?)
+        {COUGH_FILTER} AND timestamp >= DATE('now', 'localtime', ?)
         GROUP BY week
         ORDER BY week ASC
     """, (f'-{weeks * 7} days',))

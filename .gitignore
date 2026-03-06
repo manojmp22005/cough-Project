@@ -1,4 +1,20 @@
-# Large Datasets
-ESC-50-master/audio.zip
+# Large Datasets and Media
+ESC-50-master/
 *.zip
 *.tar.gz
+*.wav
+*.mp3
+
+# Environment and Secrets
+.env
+recording_status.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# Database
+*.db

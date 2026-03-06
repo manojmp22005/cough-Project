@@ -6,6 +6,8 @@ import pandas as pd
 import datetime
 from dotenv import load_dotenv
 from gemini_utils import get_gemini_response, analyze_audio_with_gemini
+from notification_utils import send_full_email_report
+import urllib.parse
 from db_utils import (init_db, get_recent_coughs, clear_db, 
                       get_daily_counts, get_hourly_counts_today,
                       get_total_count, get_today_count, get_weekly_counts)
@@ -28,7 +30,6 @@ st.markdown("""
     /* ===== HIDE STREAMLIT DEFAULTS ===== */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
     /* ===== MAIN BACKGROUND ===== */
     .stApp {
@@ -306,6 +307,11 @@ else:
         st.rerun()
 
 st.sidebar.markdown("---")
+st.sidebar.markdown("### 📧 Automated Sharing")
+recipient_email = st.sidebar.text_input("Recipient Email", placeholder="user@gmail.com")
+st.sidebar.info("Analyze a cough, then click **'🚀 Send Full Report'** to instantly send the analysis via Gmail.")
+
+st.sidebar.markdown("---")
 
 if st.sidebar.button("🗑️ Clear History", use_container_width=True):
     clear_db()
@@ -331,7 +337,7 @@ st.sidebar.markdown(f"**Status:** {'🔴 Recording' if is_recording else '🟢 R
 # ==============================
 # TABS
 # ==============================
-tab_monitor, tab_tracker = st.tabs(["📡  Live Monitor", "📊  Cough Tracker"])
+tab_monitor, tab_tracker = st.tabs(["📡 Live Monitor", "📊 Cough Tracker"])
 
 # ==============================
 # TAB 1: LIVE MONITOR
@@ -416,22 +422,96 @@ with tab_monitor:
                             analysis = analyze_audio_with_gemini(latest_file, api_key)
                             st.session_state.analysis_result = analysis
                             st.session_state.analyzed_file = latest_file
+                            
+                            # --- Update Database Result ---
+                            # Extract Detection and Cough Type from the analysis text
+                            lower_analysis = analysis.lower()
+                            
+                            # Prioritize checking for noise indicators
+                            if "non-cough" in lower_analysis or "noise" in lower_analysis:
+                                detection = "Noise"
+                            elif "cough" in lower_analysis or "🤧" in lower_analysis:
+                                detection = "Cough"
+                            else:
+                                detection = "Noise" # Fallback if unclear
+                            
+                            # Find the specific cough type line
+                            cough_type_label = ""
+                            for line in analysis.split('\n'):
+                                if "cough type:" in line.lower():
+                                    parts = line.split(":")
+                                    if len(parts) > 1:
+                                        found_label = parts[1].replace("*", "").strip() # Remove markdown bolding if any
+                                        if found_label:
+                                            cough_type_label = found_label
+                                            break
+                            
+                            # Final label for DB - make it clean (no trailing colons)
+                            if detection == "Cough":
+                                final_label = f"Cough: {cough_type_label}" if cough_type_label else "Cough"
+                            else:
+                                final_label = "Noise"
+
+                            from db_utils import update_cough_analysis
+                            update_cough_analysis(latest[0], final_label)
+                            
                             st.rerun()
                         except Exception as e:
                             st.error(f"Analysis Error: {e}")
 
-            if st.session_state.analysis_result:
-                st.markdown(f"""
-                <div class="glass-card" style="border-color: rgba(78, 205, 196, 0.3);">
-                    <span class="badge badge-success">✓ COMPLETE</span>
-                    <span style="color: #4ECDC4; font-weight: 600; margin-left: 10px;">
-                        Analysis for {st.session_state.analyzed_file}
+        # --- Display Analysis Result ---
+        if st.session_state.analysis_result:
+            st.markdown(f"""
+            <div class="glass-card" style="border-color: rgba(78, 205, 196, 0.3);">
+                <span class="badge badge-success">✓ ANALYSIS COMPLETE</span>
+                <span style="color: #4ECDC4; font-weight: 600; margin-left: 10px;">
+                    Report for {st.session_state.analyzed_file}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Robust Extraction
+            desc = "Click 'View Full AI Report Details' below to read the analysis."
+            severity = "See full report"
+            
+            for line in st.session_state.analysis_result.split('\n'):
+                l_lower = line.lower()
+                if "description:" in l_lower and len(line.split(":")) > 1:
+                    desc = line.split(":", 1)[1].strip()
+                if ("severity rating:" in l_lower or "severity:" in l_lower) and len(line.split(":")) > 1:
+                    severity = line.split(":", 1)[1].strip()
+
+            st.markdown(f"""
+            <div class="insight-box">
+                <div style="color: #4ECDC4; font-size: 0.8rem; text-transform: uppercase; font-weight: 700; margin-bottom: 5px;">📖 Quick Description</div>
+                <div style="font-size: 1.1rem; color: #FAFAFA; line-height: 1.5;">{desc}</div>
+                <div style="margin-top: 10px; font-size: 0.85rem; color: #8B95A5;">
+                    <span style="background: rgba(255, 107, 107, 0.1); color: #FF6B6B; padding: 2px 8px; border-radius: 4px; font-weight: 600;">
+                        Severity: {severity}
                     </span>
                 </div>
-                """, unsafe_allow_html=True)
-                st.markdown(st.session_state.analysis_result)
+            </div>
+            """, unsafe_allow_html=True)
 
-        elif latest[2] != "Audio Recorded" and "Cough" in latest[2]:
+            with st.expander("🔍 View Full AI Report Details"):
+                st.markdown(st.session_state.analysis_result)
+            
+            # --- Export/Sharing Section ---
+            st.markdown("### 📤 Share Analysis Report")
+            
+            email_body = f"Hello,\n\nI am sharing my AI Cough Analysis Report.\n\n"
+            email_body += "========================================\n"
+            email_body += st.session_state.analysis_result
+            email_body += "\n========================================\n\n"
+            email_body += "Generated by Smart AI Cough Monitor."
+            
+            encoded_body = urllib.parse.quote(email_body)
+            gmail_url = f"https://mail.google.com/mail/?view=cm&fs=1&to={recipient_email}&su=AI Cough Analysis Report&body={encoded_body}"
+            
+            st.link_button("🚀 Prepare Gmail Report", gmail_url, use_container_width=True, type="primary")
+            st.info("💡 No password required! This will open Gmail with the report already filled in.")
+
+        elif latest[2] != "Audio Recorded" and "Cough" in latest[2] and st.session_state.analysis_result is None:
             st.markdown(f"""
             <div class="glass-card" style="border-color: rgba(78, 205, 196, 0.3);">
                 <span class="badge badge-success">✓ DETECTED</span>
@@ -453,7 +533,6 @@ with tab_monitor:
                 "📊 Confidence": f"{r[3]*100:.0f}%"
             })
         st.table(history_data)
-
     else:
         st.markdown("""
         <div class="glass-card" style="text-align: center; padding: 3rem;">
@@ -484,11 +563,10 @@ with tab_tracker:
         if day == yesterday:
             yesterday_count = count
     
+    delta_html = ""
     if yesterday_count > 0:
         delta = today_count - yesterday_count
         delta_html = f'<div class="{"metric-delta-up" if delta > 0 else "metric-delta-down"}">{"↑" if delta > 0 else "↓"} {abs(delta)} from yesterday</div>'
-    else:
-        delta_html = ""
     
     tracking_since = daily_data[0][0] if daily_data else "—"
     days_tracked = len(daily_data)

@@ -23,7 +23,7 @@ from db_utils import log_cough
 # ============================================================
 # CONFIGURATION
 # ============================================================
-SERIAL_PORT = 'COM3'
+SERIAL_PORT = 'COM19'
 BAUD_RATE = 460800
 ARDUINO_SAMPLE_RATE = 16000
 MAX_RECORD_SECONDS = 10
